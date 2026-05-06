@@ -42,7 +42,7 @@ func (t *ClientTransport) ConnectQUIC() error {
 		return err
 	}
 
-	t.conn = &quicStreamConn{stream, conn}
+	t.conn = &quicStreamConn{stream: stream, conn: conn}
 	return nil
 }
 
@@ -104,8 +104,20 @@ func (t *ClientTransport) Close() error {
 }
 
 type quicStreamConn struct {
-	quic.Stream
-	conn quic.Connection
+	stream quic.Stream
+	conn   quic.Connection
+}
+
+func (q *quicStreamConn) Read(p []byte) (int, error) {
+	return q.stream.Read(p)
+}
+
+func (q *quicStreamConn) Write(p []byte) (int, error) {
+	return q.stream.Write(p)
+}
+
+func (q *quicStreamConn) Close() error {
+	return q.stream.Close()
 }
 
 func (q *quicStreamConn) LocalAddr() net.Addr {
@@ -117,7 +129,15 @@ func (q *quicStreamConn) RemoteAddr() net.Addr {
 }
 
 func (q *quicStreamConn) SetDeadline(t time.Time) error {
-	q.SetReadDeadline(t)
-	q.SetWriteDeadline(t)
+	q.stream.SetReadDeadline(t)
+	q.stream.SetWriteDeadline(t)
 	return nil
+}
+
+func (q *quicStreamConn) SetReadDeadline(t time.Time) error {
+	return q.stream.SetReadDeadline(t)
+}
+
+func (q *quicStreamConn) SetWriteDeadline(t time.Time) error {
+	return q.stream.SetWriteDeadline(t)
 }
