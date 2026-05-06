@@ -5,89 +5,52 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
-	"fmt"
 	"io"
 
-	"golang.org/x/crypto/argon2"
-	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 type ClientQuantumEncryption struct {
-	aesGCM   cipher.AEAD
-	chacha   cipher.AEAD
-	keyHash  [32]byte
+	key []byte
+	gcm cipher.AEAD
 }
 
 func NewClientQuantumEncryption(password, salt string) (*ClientQuantumEncryption, error) {
-	key := argon2.IDKey([]byte(password), []byte(salt), 3, 64*1024, 4, 64)
-	
-	aesKey := key[:32]
-	chachaKey := key[32:64]
+	key := pbkdf2.Key([]byte(password), []byte(salt), 100000, 32, sha256.New)
 
-	block, err := aes.NewCipher(aesKey)
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
 	}
 
-	aesGCM, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-
-	chacha, err := chacha20poly1305.NewX(chachaKey)
+	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		return nil, err
 	}
 
 	return &ClientQuantumEncryption{
-		aesGCM:  aesGCM,
-		chacha:  chacha,
-		keyHash: sha256.Sum256(key),
+		key: key,
+		gcm: gcm,
 	}, nil
 }
 
-func (q *ClientQuantumEncryption) Encrypt(plaintext []byte) ([]byte, error) {
-	nonce1 := make([]byte, q.aesGCM.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce1); err != nil {
-		return nil, err
-	}
-
-	ciphertext1 := q.aesGCM.Seal(nonce1, nonce1, plaintext, nil)
-
-	nonce2 := make([]byte, q.chacha.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce2); err != nil {
-		return nil, err
-	}
-
-	ciphertext2 := q.chacha.Seal(nonce2, nonce2, ciphertext1, nil)
-
-	return ciphertext2, nil
+func (e *ClientQuantumEncryption) Encrypt(plaintext []byte) []byte {
+	nonce := make([]byte, e.gcm.NonceSize())
+	io.ReadFull(rand.Reader, nonce)
+	return e.gcm.Seal(nonce, nonce, plaintext, nil)
 }
 
-func (q *ClientQuantumEncryption) Decrypt(ciphertext []byte) ([]byte, error) {
-	if len(ciphertext) < q.chacha.NonceSize() {
-		return nil, fmt.Errorf("ciphertext too short")
+func (e *ClientQuantumEncryption) Decrypt(ciphertext []byte) []byte {
+	nonceSize := e.gcm.NonceSize()
+	if len(ciphertext) < nonceSize {
+		return nil
 	}
 
-	nonce2 := ciphertext[:q.chacha.NonceSize()]
-	ciphertext2 := ciphertext[q.chacha.NonceSize():]
-
-	plaintext1, err := q.chacha.Open(nil, nonce2, ciphertext2, nil)
+	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	plaintext, err := e.gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		return nil, err
+		return nil
 	}
 
-	if len(plaintext1) < q.aesGCM.NonceSize() {
-		return nil, fmt.Errorf("intermediate ciphertext too short")
-	}
-
-	nonce1 := plaintext1[:q.aesGCM.NonceSize()]
-	ciphertext1 := plaintext1[q.aesGCM.NonceSize():]
-
-	plaintext, err := q.aesGCM.Open(nil, nonce1, ciphertext1, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return plaintext, nil
+	return plaintext
 }
