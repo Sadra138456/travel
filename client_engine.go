@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"math/rand"
@@ -10,121 +9,100 @@ import (
 )
 
 type ClientEngine struct {
-	cfg       *ClientConfig
-	enc       *ClientQuantumEncryption
+	config    ClientConfig
+	quantum   *ClientQuantumEncryption
 	transport *ClientTransport
-	nanobots  []*Nanobot
-	pool      *NanobotPool
+	nanobots  *NanobotPool
 	mu        sync.RWMutex
-	ctx       context.Context
-	cancel    context.CancelFunc
-	stats     struct {
-		BytesSent uint64
-		BytesRecv uint64
-		Packets   uint64
-	}
+	running   bool
 }
 
-func NewClientEngine(cfg *ClientConfig, enc *ClientQuantumEncryption) (*ClientEngine, error) {
-	ctx, cancel := context.WithCancel(context.Background())
-	
-	transport, err := NewClientTransport(cfg, enc)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-
-	pool := NewNanobotPool(cfg.Stealth.MaxBots)
-
+func NewClientEngine(config ClientConfig, quantum *ClientQuantumEncryption) *ClientEngine {
 	return &ClientEngine{
-		cfg:       cfg,
-		enc:       enc,
-		transport: transport,
-		pool:      pool,
-		ctx:       ctx,
-		cancel:    cancel,
-	}, nil
+		config:  config,
+		quantum: quantum,
+	}
 }
 
 func (e *ClientEngine) Start() error {
-	initialBots := e.cfg.Stealth.MinBots
-	for i := 0; i < initialBots; i++ {
-		protocol := e.selectProtocol()
-		bot := e.pool.Get(protocol, e.transport, e.enc)
-		e.nanobots = append(e.nanobots, bot)
-		go bot.Run(e.ctx)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.running {
+		return fmt.Errorf("client already running")
 	}
 
-	go e.trafficShaper()
-	go e.dynamicScaling()
+	// ایجاد transport layer
+	e.transport = NewClientTransport(e.config, e.quantum)
 
+	// ایجاد nanobot pool
+	e.nanobots = NewNanobotPool(e.config.Stealth.MinBots, e.config.Stealth.MaxBots)
+
+	e.running = true
+
+	// شروع ارسال ترافیک
+	go e.trafficLoop()
+
+	log.Println("✅ Client engine started successfully")
 	return nil
 }
 
-func (e *ClientEngine) Stop() {
-	e.cancel()
-	e.mu.Lock()
-	for _, bot := range e.nanobots {
-		e.pool.Put(bot)
+func (e *ClientEngine) trafficLoop() {
+	ticker := time.NewTicker(time.Duration(500+rand.Intn(1500)) * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		<-ticker.C
+
+		if !e.running {
+			break
+		}
+
+		// انتخاب تصادفی پروتکل
+		protocol := e.selectProtocol()
+
+		// ارسال داده تصادفی
+		data := e.generateRandomData()
+
+		// ارسال از طریق nanobot
+		bot := e.nanobots.Acquire()
+		go func(b *Nanobot, proto string, payload []byte) {
+			defer e.nanobots.Release(b)
+
+			if err := e.transport.Send(proto, payload); err != nil {
+				log.Printf("⚠️  Send failed via %s: %v", proto, err)
+			} else {
+				log.Printf("📤 Sent %d bytes via %s (bot #%d)", len(payload), proto, b.ID)
+			}
+		}(bot, protocol, data)
+
+		// تنظیم تایمر بعدی
+		ticker.Reset(time.Duration(500+rand.Intn(1500)) * time.Millisecond)
 	}
-	e.nanobots = nil
-	e.mu.Unlock()
 }
 
 func (e *ClientEngine) selectProtocol() string {
 	r := rand.Float64()
-	if r < e.cfg.Stealth.QUICRatio {
-		return "QUIC"
-	} else if r < e.cfg.Stealth.QUICRatio+e.cfg.Stealth.HTTPSRatio {
-		return "HTTPS"
+
+	if r < e.config.Stealth.QUICRatio {
+		return "quic"
+	} else if r < e.config.Stealth.QUICRatio+e.config.Stealth.HTTPSRatio {
+		return "https"
 	}
-	return "VNC"
+	return "vnc"
 }
 
-func (e *ClientEngine) trafficShaper() {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-e.ctx.Done():
-			return
-		case <-ticker.C:
-			time.Sleep(time.Duration(50+rand.Intn(150)) * time.Millisecond)
-		}
-	}
+func (e *ClientEngine) generateRandomData() []byte {
+	size := 800 + rand.Intn(600) // 800-1400 bytes
+	data := make([]byte, size)
+	rand.Read(data)
+	return data
 }
 
-func (e *ClientEngine) dynamicScaling() {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
+func (e *ClientEngine) Stop() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 
-	for {
-		select {
-		case <-e.ctx.Done():
-			return
-		case <-ticker.C:
-			e.mu.Lock()
-			current := len(e.nanobots)
-			target := e.cfg.Stealth.MinBots + rand.Intn(10)
-			
-			if target > current {
-				for i := 0; i < target-current; i++ {
-					protocol := e.selectProtocol()
-					bot := e.pool.Get(protocol, e.transport, e.enc)
-					e.nanobots = append(e.nanobots, bot)
-					go bot.Run(e.ctx)
-				}
-			} else if target < current {
-				for i := 0; i < current-target; i++ {
-					if len(e.nanobots) > 0 {
-						bot := e.nanobots[len(e.nanobots)-1]
-						e.nanobots = e.nanobots[:len(e.nanobots)-1]
-						e.pool.Put(bot)
-					}
-				}
-			}
-			e.mu.Unlock()
-		}
-	}
+	e.running = false
+	log.Println("🛑 Client engine stopped")
 }
