@@ -1,47 +1,27 @@
 package main
 
 import (
-	"fmt"
+	"log"
 	"os"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage:")
-		fmt.Println("  Client: go run . client_config.json")
-		fmt.Println("  Server: go run . server_config.json")
-		os.Exit(1)
+		log.Fatal("Usage: travel <config.json>")
 	}
 
-	configFile := os.Args[1]
-	
-	if isClientConfig(configFile) {
-		runClient()
-	} else {
-		runServer()
-	}
-}
+	configPath := os.Args[1]
 
-func isClientConfig(filename string) bool {
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return false
-	}
-	
-	return len(data) > 0 && (string(data)[0:20] == `{
-  "server": {
-    "a` || containsString(string(data), `"server":`))
-}
-
-func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && findSubstring(s, substr)
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
+	// تشخیص کلاینت یا سرور بر اساس نام فایل
+	if configPath == "client_config.json" {
+		if err := runClient(configPath); err != nil {
+			log.Fatal(err)
 		}
+	} else if configPath == "server_config.json" {
+		if err := runServer(configPath); err != nil {
+			log.Fatal(err)
+		}
+	} else {
+		log.Fatal("Config file must be 'client_config.json' or 'server_config.json'")
 	}
-	return false
 }
