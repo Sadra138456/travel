@@ -1,108 +1,77 @@
 package main
 
 import (
-	"fmt"
 	"log"
-	"math/rand"
-	"sync"
 	"time"
 )
 
 type ClientEngine struct {
-	config    ClientConfig
-	quantum   *ClientQuantumEncryption
+	cfg       *ClientConfig
 	transport *ClientTransport
 	nanobots  *NanobotPool
-	mu        sync.RWMutex
-	running   bool
+	enc       *ClientQuantumEncryption
 }
 
-func NewClientEngine(config ClientConfig, quantum *ClientQuantumEncryption) *ClientEngine {
-	return &ClientEngine{
-		config:  config,
-		quantum: quantum,
+func NewClientEngine(cfg *ClientConfig) (*ClientEngine, error) {
+	enc, err := NewClientQuantumEncryption(cfg.Password, cfg.Salt)
+	if err != nil {
+		return nil, err
 	}
+
+	return &ClientEngine{
+		cfg: cfg,
+		enc: enc,
+	}, nil
 }
 
 func (e *ClientEngine) Start() error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.transport = NewClientTransport(e.cfg, e.enc)
+	e.nanobots = NewNanobotPool(e.cfg.NanobotCount)
 
-	if e.running {
-		return fmt.Errorf("client already running")
+	var err error
+	switch e.cfg.Protocol {
+	case "QUIC":
+		err = e.transport.ConnectQUIC()
+	case "HTTPS":
+		err = e.transport.ConnectHTTPS()
+	case "VNC":
+		err = e.transport.ConnectVNC()
 	}
 
-	// ایجاد transport layer
-	e.transport = NewClientTransport(e.config, e.quantum)
+	if err != nil {
+		return err
+	}
 
-	// ایجاد nanobot pool
-	e.nanobots = NewNanobotPool(e.config.Stealth.MinBots, e.config.Stealth.MaxBots)
+	log.Printf("✓ Connected via %s", e.cfg.Protocol)
 
-	e.running = true
-
-	// شروع ارسال ترافیک
 	go e.trafficLoop()
 
-	log.Println("✅ Client engine started successfully")
 	return nil
 }
 
 func (e *ClientEngine) trafficLoop() {
-	ticker := time.NewTicker(time.Duration(500+rand.Intn(1500)) * time.Millisecond)
+	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
-	for {
-		<-ticker.C
-
-		if !e.running {
-			break
+	for range ticker.C {
+		bot := e.nanobots.Acquire()
+		if bot == nil {
+			continue
 		}
 
-		// انتخاب تصادفی پروتکل
-		protocol := e.selectProtocol()
+		data := bot.GenerateTraffic()
+		_, err := e.transport.Write(data)
+		if err != nil {
+			log.Printf("Send error: %v", err)
+		}
 
-		// ارسال داده تصادفی
-		data := e.generateRandomData()
-
-		// ارسال از طریق nanobot
-		bot := e.nanobots.Acquire()
-		go func(b *Nanobot, proto string, payload []byte) {
-			defer e.nanobots.Release(b)
-
-			if err := e.transport.Send(proto, payload); err != nil {
-				log.Printf("⚠️  Send failed via %s: %v", proto, err)
-			} else {
-				log.Printf("📤 Sent %d bytes via %s (bot #%d)", len(payload), proto, b.ID)
-			}
-		}(bot, protocol, data)
-
-		// تنظیم تایمر بعدی
-		ticker.Reset(time.Duration(500+rand.Intn(1500)) * time.Millisecond)
+		e.nanobots.Release(bot)
+		time.Sleep(bot.Jitter)
 	}
-}
-
-func (e *ClientEngine) selectProtocol() string {
-	r := rand.Float64()
-
-	if r < e.config.Stealth.QUICRatio {
-		return "quic"
-	} else if r < e.config.Stealth.QUICRatio+e.config.Stealth.HTTPSRatio {
-		return "https"
-	}
-	return "vnc"
-}
-
-func (e *ClientEngine) generateRandomData() []byte {
-	size := 800 + rand.Intn(600) // 800-1400 bytes
-	data := make([]byte, size)
-	rand.Read(data)
-	return data
 }
 
 func (e *ClientEngine) Stop() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	e.running = false
-	log.Println("🛑 Client engine stopped")
+	if e.transport != nil {
+		e.transport.Close()
+	}
 }
