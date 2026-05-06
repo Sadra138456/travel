@@ -173,7 +173,7 @@ func generateTLSConfig() (*tls.Config, error) {
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsageServerAuth},
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 	}
 
@@ -195,4 +195,3 @@ func generateTLSConfig() (*tls.Config, error) {
 		NextProtos:   []string{"h3", "http/1.1"},
 	}, nil
 }
-
