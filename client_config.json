@@ -14,9 +14,5 @@
     "max_burst_kb": 50,
     "min_bots": 5,
     "max_bots": 100
-  },
-  "local_socks": {
-    "enabled": false,
-    "port": 1080
   }
 }
