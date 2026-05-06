@@ -1,95 +1,62 @@
 package main
 
 import (
-	"context"
-	"math/rand"
+	"crypto/rand"
 	"sync"
 	"time"
 )
 
 type Nanobot struct {
-	ID        string
-	Protocol  string
-	transport *ClientTransport
-	enc       *ClientQuantumEncryption
-	active    bool
+	ID        int
+	Jitter    time.Duration
+	PacketSize int
+	Active    bool
 }
 
 type NanobotPool struct {
-	pool chan *Nanobot
+	bots []*Nanobot
 	mu   sync.Mutex
 }
 
-func NewNanobotPool(size int) *NanobotPool {
-	return &NanobotPool{
-		pool: make(chan *Nanobot, size),
+func NewNanobotPool(count int) *NanobotPool {
+	pool := &NanobotPool{
+		bots: make([]*Nanobot, count),
 	}
-}
 
-func (p *NanobotPool) Get(protocol string, transport *ClientTransport, enc *ClientQuantumEncryption) *Nanobot {
-	select {
-	case bot := <-p.pool:
-		bot.Protocol = protocol
-		bot.active = true
-		return bot
-	default:
-		return &Nanobot{
-			ID:        generateID(),
-			Protocol:  protocol,
-			transport: transport,
-			enc:       enc,
-			active:    true,
+	for i := 0; i < count; i++ {
+		pool.bots[i] = &Nanobot{
+			ID:         i,
+			Jitter:     time.Duration(50+i*10) * time.Millisecond,
+			PacketSize: 512 + i*128,
+			Active:     true,
 		}
 	}
+
+	return pool
 }
 
-func (p *NanobotPool) Put(bot *Nanobot) {
-	bot.active = false
-	select {
-	case p.pool <- bot:
-	default:
-	}
-}
+func (p *NanobotPool) Acquire() *Nanobot {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-func (b *Nanobot) Run(ctx context.Context) {
-	ticker := time.NewTicker(time.Duration(500+rand.Intn(1500)) * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if !b.active {
-				return
-			}
-			b.sendPacket()
+	for _, bot := range p.bots {
+		if bot.Active {
+			return bot
 		}
 	}
+	return p.bots[0]
 }
 
-func (b *Nanobot) sendPacket() {
-	size := 800 + rand.Intn(600)
-	payload := make([]byte, size)
-	rand.Read(payload)
-
-	encrypted, _ := b.enc.Encrypt(payload)
-	
-	switch b.Protocol {
-	case "QUIC":
-		b.transport.SendQUIC(encrypted)
-	case "HTTPS":
-		b.transport.SendHTTPS(encrypted)
-	case "VNC":
-		b.transport.SendVNC(encrypted)
-	}
+func (p *NanobotPool) Release(bot *Nanobot) {
+	// نیازی به کاری نیست - فقط برای سازگاری
 }
 
-func generateID() string {
-	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, 16)
-	for i := range b {
-		b[i] = chars[rand.Intn(len(chars))]
-	}
-	return string(b)
+func (p *NanobotPool) GetAll() []*Nanobot {
+	return p.bots
+}
+
+func (n *Nanobot) GenerateTraffic() []byte {
+	data := make([]byte, n.PacketSize)
+	rand.Read(data)
+	return data
 }
