@@ -5,8 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/signal"
-	"syscall"
+	"time"
 )
 
 type ClientConfig struct {
@@ -19,57 +18,48 @@ type ClientConfig struct {
 		Salt     string `json:"salt"`
 	} `json:"encryption"`
 	Stealth struct {
-		QUICRatio   float64 `json:"quic_ratio"`
-		HTTPSRatio  float64 `json:"https_ratio"`
-		VNCRatio    float64 `json:"vnc_ratio"`
-		MaxBurstKB  int     `json:"max_burst_kb"`
-		MinBots     int     `json:"min_bots"`
-		MaxBots     int     `json:"max_bots"`
+		QUICRatio  float64 `json:"quic_ratio"`
+		HTTPSRatio float64 `json:"https_ratio"`
+		VNCRatio   float64 `json:"vnc_ratio"`
+		MaxBurstKB int     `json:"max_burst_kb"`
+		MinBots    int     `json:"min_bots"`
+		MaxBots    int     `json:"max_bots"`
 	} `json:"stealth"`
-	LocalSOCKS struct {
-		Enabled bool   `json:"enabled"`
-		Port    int    `json:"port"`
-	} `json:"local_socks"`
 }
 
 func runClient() {
-	if len(os.Args) < 2 {
-		log.Fatal("Usage: ./ant-project client_config.json")
-	}
-
-	data, err := os.ReadFile(os.Args[1])
+	configFile := os.Args[1]
+	
+	data, err := os.ReadFile(configFile)
 	if err != nil {
 		log.Fatalf("Failed to read config: %v", err)
 	}
 
-	var cfg ClientConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	var config ClientConfig
+	if err := json.Unmarshal(data, &config); err != nil {
 		log.Fatalf("Failed to parse config: %v", err)
 	}
 
-	enc, err := NewClientQuantumEncryption(cfg.Encryption.Password, cfg.Encryption.Salt)
+	quantum, err := NewClientQuantumEncryption(config.Encryption.Password, config.Encryption.Salt)
 	if err != nil {
 		log.Fatalf("Failed to initialize encryption: %v", err)
 	}
 
-	engine, err := NewClientEngine(&cfg, enc)
-	if err != nil {
-		log.Fatalf("Failed to initialize client: %v", err)
-	}
+	engine := NewClientEngine(config, quantum)
+
+	log.Printf("🚀 ANT Client started")
+	log.Printf("📡 Connecting to %s:%d", config.Server.Address, config.Server.Port)
+	log.Printf("🔐 Quantum-Resistant Encryption: Enabled")
+	log.Printf("🤖 Dynamic Nanobots: %d-%d", config.Stealth.MinBots, config.Stealth.MaxBots)
+	log.Printf("🎭 Protocol Mix: QUIC(%.0f%%) HTTPS(%.0f%%) VNC(%.0f%%)",
+		config.Stealth.QUICRatio*100,
+		config.Stealth.HTTPSRatio*100,
+		config.Stealth.VNCRatio*100)
 
 	if err := engine.Start(); err != nil {
 		log.Fatalf("Failed to start client: %v", err)
 	}
 
-	fmt.Printf("✓ ANT Client connected to %s:%d\n", cfg.Server.Address, cfg.Server.Port)
-	if cfg.LocalSOCKS.Enabled {
-		fmt.Printf("  SOCKS5 proxy: 127.0.0.1:%d\n", cfg.LocalSOCKS.Port)
-	}
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	<-sigChan
-
-	fmt.Println("\nShutting down...")
-	engine.Stop()
+	// نگه‌داشتن برنامه
+	select {}
 }
