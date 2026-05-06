@@ -3,7 +3,7 @@
   "quic_port": 8443,
   "https_port": 8444,
   "vnc_port": 5900,
-  "password": "your-strong-password-here",
-  "salt": "your-random-salt-here",
+  "password": "K9#vP2!mZ7*rQ5$x",
+  "salt": "7f8d3b2a9e1c4f5d0b6a8c7e2d1f4a9b5c8e7d2f0a3b6c9d1e4f5a7b8c9d0e1f",
   "max_clients": 1000
 }
