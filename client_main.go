@@ -2,64 +2,60 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"os"
-	"time"
+	"os/signal"
+	"syscall"
 )
 
 type ClientConfig struct {
-	Server struct {
-		Address string `json:"address"`
-		Port    int    `json:"port"`
-	} `json:"server"`
-	Encryption struct {
-		Password string `json:"password"`
-		Salt     string `json:"salt"`
-	} `json:"encryption"`
-	Stealth struct {
-		QUICRatio  float64 `json:"quic_ratio"`
-		HTTPSRatio float64 `json:"https_ratio"`
-		VNCRatio   float64 `json:"vnc_ratio"`
-		MaxBurstKB int     `json:"max_burst_kb"`
-		MinBots    int     `json:"min_bots"`
-		MaxBots    int     `json:"max_bots"`
-	} `json:"stealth"`
+	ServerAddr   string `json:"server_addr"`
+	QUICPort     int    `json:"quic_port"`
+	HTTPSPort    int    `json:"https_port"`
+	VNCPort      int    `json:"vnc_port"`
+	Protocol     string `json:"protocol"`
+	Password     string `json:"password"`
+	Salt         string `json:"salt"`
+	NanobotCount int    `json:"nanobot_count"`
 }
 
-func runClient() {
-	configFile := os.Args[1]
-	
-	data, err := os.ReadFile(configFile)
+func loadClientConfig(path string) (*ClientConfig, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		log.Fatalf("Failed to read config: %v", err)
+		return nil, err
 	}
 
-	var config ClientConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		log.Fatalf("Failed to parse config: %v", err)
+	var cfg ClientConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, err
 	}
 
-	quantum, err := NewClientQuantumEncryption(config.Encryption.Password, config.Encryption.Salt)
+	return &cfg, nil
+}
+
+func runClient(configPath string) error {
+	cfg, err := loadClientConfig(configPath)
 	if err != nil {
-		log.Fatalf("Failed to initialize encryption: %v", err)
+		return err
 	}
 
-	engine := NewClientEngine(config, quantum)
-
-	log.Printf("🚀 ANT Client started")
-	log.Printf("📡 Connecting to %s:%d", config.Server.Address, config.Server.Port)
-	log.Printf("🔐 Quantum-Resistant Encryption: Enabled")
-	log.Printf("🤖 Dynamic Nanobots: %d-%d", config.Stealth.MinBots, config.Stealth.MaxBots)
-	log.Printf("🎭 Protocol Mix: QUIC(%.0f%%) HTTPS(%.0f%%) VNC(%.0f%%)",
-		config.Stealth.QUICRatio*100,
-		config.Stealth.HTTPSRatio*100,
-		config.Stealth.VNCRatio*100)
+	engine, err := NewClientEngine(cfg)
+	if err != nil {
+		return err
+	}
 
 	if err := engine.Start(); err != nil {
-		log.Fatalf("Failed to start client: %v", err)
+		return err
 	}
 
-	// نگه‌داشتن برنامه
-	select {}
+	log.Println("✓ Client started")
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
+
+	engine.Stop()
+	log.Println("✓ Client stopped")
+
+	return nil
 }
