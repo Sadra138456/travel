@@ -1,22 +1,9 @@
 {
-  "server": {
-    "address": "185.208.172.162",
-    "port": 443
-  },
-  "encryption": {
-    "password": "your-strong-password-here",
-    "salt": "your-random-salt-here"
-  },
-  "stealth": {
-    "quic_ratio": 0.4,
-    "https_ratio": 0.3,
-    "vnc_ratio": 0.3,
-    "max_burst_kb": 50,
-    "min_bots": 5,
-    "max_bots": 100
-  },
-  "local_socks": {
-    "enabled": false,
-    "port": 1080
-  }
+  "listen_addr": "0.0.0.0",
+  "quic_port": 8443,
+  "https_port": 8444,
+  "vnc_port": 5900,
+  "password": "your-strong-password-here",
+  "salt": "your-random-salt-here",
+  "max_clients": 1000
 }
