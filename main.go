@@ -1,27 +1,32 @@
 package main
 
 import (
-	"log"
+	"fmt"
 	"os"
+	"strings"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		log.Fatal("Usage: travel <config.json>")
+		fmt.Println("Usage: travel <config.json>")
+		os.Exit(1)
 	}
 
 	configPath := os.Args[1]
 
-	// تشخیص کلاینت یا سرور بر اساس نام فایل
-	if configPath == "client_config.json" {
+	// Determine if this is client or server based on config filename
+	if strings.Contains(configPath, "client") {
 		if err := runClient(configPath); err != nil {
-			log.Fatal(err)
+			fmt.Printf("Client error: %v\n", err)
+			os.Exit(1)
 		}
-	} else if configPath == "server_config.json" {
+	} else if strings.Contains(configPath, "server") {
 		if err := runServer(configPath); err != nil {
-			log.Fatal(err)
+			fmt.Printf("Server error: %v\n", err)
+			os.Exit(1)
 		}
 	} else {
-		log.Fatal("Config file must be 'client_config.json' or 'server_config.json'")
+		fmt.Println("Config file must contain 'client' or 'server' in its name")
+		os.Exit(1)
 	}
 }
