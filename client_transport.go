@@ -5,139 +5,54 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
-	"time"
 
 	"github.com/quic-go/quic-go"
 )
 
 type ClientTransport struct {
-	cfg  *ClientConfig
-	enc  *ClientQuantumEncryption
-	conn net.Conn
-	ctx  context.Context
+	serverAddr string
+	tlsConfig  *tls.Config
+	conn       *quic.Connection
 }
 
-func NewClientTransport(cfg *ClientConfig, enc *ClientQuantumEncryption) *ClientTransport {
+func NewClientTransport(serverAddr string) *ClientTransport {
 	return &ClientTransport{
-		cfg: cfg,
-		enc: enc,
-		ctx: context.Background(),
+		serverAddr: serverAddr,
+		tlsConfig: &tls.Config{
+			InsecureSkipVerify: true,
+			NextProtos:         []string{"ant-protocol"},
+		},
 	}
 }
 
-func (t *ClientTransport) ConnectQUIC() error {
-	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true,
-		NextProtos:         []string{"h3"},
-	}
-
-	addr := fmt.Sprintf("%s:%d", t.cfg.ServerAddr, t.cfg.QUICPort)
-	conn, err := quic.DialAddr(t.ctx, addr, tlsConfig, nil)
+func (t *ClientTransport) Connect(ctx context.Context) error {
+	conn, err := quic.DialAddr(ctx, t.serverAddr, t.tlsConfig, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to dial QUIC: %w", err)
 	}
-
-	stream, err := conn.OpenStreamSync(t.ctx)
-	if err != nil {
-		return err
-	}
-
-	t.conn = &quicStreamConn{stream: stream, conn: conn}
+	t.conn = &conn
 	return nil
 }
 
-func (t *ClientTransport) ConnectHTTPS() error {
-	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true,
-	}
-
-	addr := fmt.Sprintf("%s:%d", t.cfg.ServerAddr, t.cfg.HTTPSPort)
-	conn, err := tls.Dial("tcp", addr, tlsConfig)
-	if err != nil {
-		return err
-	}
-
-	t.conn = conn
-	return nil
-}
-
-func (t *ClientTransport) ConnectVNC() error {
-	addr := fmt.Sprintf("%s:%d", t.cfg.ServerAddr, t.cfg.VNCPort)
-	conn, err := net.Dial("tcp", addr)
-	if err != nil {
-		return err
-	}
-
-	buf := make([]byte, 12)
-	conn.Read(buf)
-
-	t.conn = conn
-	return nil
-}
-
-func (t *ClientTransport) Write(data []byte) (int, error) {
+func (t *ClientTransport) OpenStream(ctx context.Context) (net.Conn, error) {
 	if t.conn == nil {
-		return 0, fmt.Errorf("not connected")
+		return nil, fmt.Errorf("not connected")
 	}
-	encrypted := t.enc.Encrypt(data)
-	return t.conn.Write(encrypted)
-}
 
-func (t *ClientTransport) Read(buf []byte) (int, error) {
-	if t.conn == nil {
-		return 0, fmt.Errorf("not connected")
-	}
-	n, err := t.conn.Read(buf)
+	stream, err := (*t.conn).OpenStreamSync(ctx)
 	if err != nil {
-		return n, err
+		return nil, fmt.Errorf("failed to open stream: %w", err)
 	}
-	decrypted := t.enc.Decrypt(buf[:n])
-	copy(buf, decrypted)
-	return len(decrypted), nil
+
+	return &quicStreamConn{
+		stream: stream,
+		conn:   t.conn,
+	}, nil
 }
 
 func (t *ClientTransport) Close() error {
 	if t.conn != nil {
-		return t.conn.Close()
+		return (*t.conn).CloseWithError(0, "client closing")
 	}
 	return nil
-}
-
-type quicStreamConn struct {
-	stream quic.Stream
-	conn   quic.Connection
-}
-
-func (q *quicStreamConn) Read(p []byte) (int, error) {
-	return q.stream.Read(p)
-}
-
-func (q *quicStreamConn) Write(p []byte) (int, error) {
-	return q.stream.Write(p)
-}
-
-func (q *quicStreamConn) Close() error {
-	return q.stream.Close()
-}
-
-func (q *quicStreamConn) LocalAddr() net.Addr {
-	return q.conn.LocalAddr()
-}
-
-func (q *quicStreamConn) RemoteAddr() net.Addr {
-	return q.conn.RemoteAddr()
-}
-
-func (q *quicStreamConn) SetDeadline(t time.Time) error {
-	q.stream.SetReadDeadline(t)
-	q.stream.SetWriteDeadline(t)
-	return nil
-}
-
-func (q *quicStreamConn) SetReadDeadline(t time.Time) error {
-	return q.stream.SetReadDeadline(t)
-}
-
-func (q *quicStreamConn) SetWriteDeadline(t time.Time) error {
-	return q.stream.SetWriteDeadline(t)
 }
