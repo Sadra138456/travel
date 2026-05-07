@@ -1,61 +1,56 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
-	"log"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 )
 
 type ClientConfig struct {
-	ServerAddr   string `json:"server_addr"`
-	QUICPort     int    `json:"quic_port"`
-	HTTPSPort    int    `json:"https_port"`
-	VNCPort      int    `json:"vnc_port"`
-	Protocol     string `json:"protocol"`
-	Password     string `json:"password"`
-	Salt         string `json:"salt"`
-	NanobotCount int    `json:"nanobot_count"`
-}
-
-func loadClientConfig(path string) (*ClientConfig, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var cfg ClientConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, err
-	}
-
-	return &cfg, nil
+	ServerAddr string `json:"server_addr"`
+	Password   string `json:"password"`
+	Salt       string `json:"salt"`
+	LocalAddr  string `json:"local_addr"`
 }
 
 func runClient(configPath string) error {
-	cfg, err := loadClientConfig(configPath)
+	// Read config
+	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read config: %w", err)
 	}
 
-	engine, err := NewClientEngine(cfg)
-	if err != nil {
-		return err
+	var config ClientConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	if err := engine.Start(); err != nil {
-		return err
-	}
+	// Create encryption
+	enc := NewClientQuantumEncryption(config.Password, config.Salt)
 
-	log.Println("✓ Client started")
+	// Create transport
+	transport := NewClientTransport(config.ServerAddr)
+
+	// Create engine
+	engine := NewClientEngine(transport, enc, config.LocalAddr)
+
+	// Setup signal handling
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	<-sigChan
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	engine.Stop()
-	log.Println("✓ Client stopped")
+	go func() {
+		<-sigChan
+		fmt.Println("\nShutting down client...")
+		cancel()
+	}()
 
-	return nil
+	// Start engine
+	fmt.Printf("Starting client, listening on %s\n", config.LocalAddr)
+	return engine.Start(ctx)
 }
