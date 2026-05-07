@@ -8,85 +8,65 @@ import (
 	"fmt"
 	"io"
 
-	"golang.org/x/crypto/argon2"
-	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 type ServerQuantumEncryption struct {
-	aesGCM   cipher.AEAD
-	chacha   cipher.AEAD
-	keyHash  [32]byte
+	password []byte
+	salt     []byte
 }
 
-func NewServerQuantumEncryption(password, salt string) (*ServerQuantumEncryption, error) {
-	key := argon2.IDKey([]byte(password), []byte(salt), 3, 64*1024, 4, 64)
-	
-	aesKey := key[:32]
-	chachaKey := key[32:64]
-
-	block, err := aes.NewCipher(aesKey)
-	if err != nil {
-		return nil, err
-	}
-
-	aesGCM, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-
-	chacha, err := chacha20poly1305.NewX(chachaKey)
-	if err != nil {
-		return nil, err
-	}
-
+func NewServerQuantumEncryption(password, salt string) *ServerQuantumEncryption {
 	return &ServerQuantumEncryption{
-		aesGCM:  aesGCM,
-		chacha:  chacha,
-		keyHash: sha256.Sum256(key),
-	}, nil
+		password: []byte(password),
+		salt:     []byte(salt),
+	}
 }
 
-func (q *ServerQuantumEncryption) Encrypt(plaintext []byte) ([]byte, error) {
-	nonce1 := make([]byte, q.aesGCM.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce1); err != nil {
-		return nil, err
+func (e *ServerQuantumEncryption) Encrypt(plaintext []byte) ([]byte, error) {
+	key := pbkdf2.Key(e.password, e.salt, 4096, 32, sha256.New)
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
 	}
 
-	ciphertext1 := q.aesGCM.Seal(nonce1, nonce1, plaintext, nil)
-
-	nonce2 := make([]byte, q.chacha.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce2); err != nil {
-		return nil, err
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
 	}
 
-	ciphertext2 := q.chacha.Seal(nonce2, nonce2, ciphertext1, nil)
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+	}
 
-	return ciphertext2, nil
+	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
+	return ciphertext, nil
 }
 
-func (q *ServerQuantumEncryption) Decrypt(ciphertext []byte) ([]byte, error) {
-	if len(ciphertext) < q.chacha.NonceSize() {
+func (e *ServerQuantumEncryption) Decrypt(ciphertext []byte) ([]byte, error) {
+	key := pbkdf2.Key(e.password, e.salt, 4096, 32, sha256.New)
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	nonceSize := gcm.NonceSize()
+	if len(ciphertext) < nonceSize {
 		return nil, fmt.Errorf("ciphertext too short")
 	}
 
-	nonce2 := ciphertext[:q.chacha.NonceSize()]
-	ciphertext2 := ciphertext[q.chacha.NonceSize():]
-
-	plaintext1, err := q.chacha.Open(nil, nonce2, ciphertext2, nil)
+	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		return nil, err
-	}
-
-	if len(plaintext1) < q.aesGCM.NonceSize() {
-		return nil, fmt.Errorf("intermediate ciphertext too short")
-	}
-
-	nonce1 := plaintext1[:q.aesGCM.NonceSize()]
-	ciphertext1 := plaintext1[q.aesGCM.NonceSize():]
-
-	plaintext, err := q.aesGCM.Open(nil, nonce1, ciphertext1, nil)
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to decrypt: %w", err)
 	}
 
 	return plaintext, nil
