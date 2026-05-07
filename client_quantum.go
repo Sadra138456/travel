@@ -5,52 +5,69 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"fmt"
 	"io"
 
 	"golang.org/x/crypto/pbkdf2"
 )
 
 type ClientQuantumEncryption struct {
-	key []byte
-	gcm cipher.AEAD
+	password []byte
+	salt     []byte
 }
 
-func NewClientQuantumEncryption(password, salt string) (*ClientQuantumEncryption, error) {
-	key := pbkdf2.Key([]byte(password), []byte(salt), 100000, 32, sha256.New)
+func NewClientQuantumEncryption(password, salt string) *ClientQuantumEncryption {
+	return &ClientQuantumEncryption{
+		password: []byte(password),
+		salt:     []byte(salt),
+	}
+}
+
+func (e *ClientQuantumEncryption) Encrypt(plaintext []byte) ([]byte, error) {
+	key := pbkdf2.Key(e.password, e.salt, 4096, 32, sha256.New)
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
 	}
 
-	return &ClientQuantumEncryption{
-		key: key,
-		gcm: gcm,
-	}, nil
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+	}
+
+	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
+	return ciphertext, nil
 }
 
-func (e *ClientQuantumEncryption) Encrypt(plaintext []byte) []byte {
-	nonce := make([]byte, e.gcm.NonceSize())
-	io.ReadFull(rand.Reader, nonce)
-	return e.gcm.Seal(nonce, nonce, plaintext, nil)
-}
+func (e *ClientQuantumEncryption) Decrypt(ciphertext []byte) ([]byte, error) {
+	key := pbkdf2.Key(e.password, e.salt, 4096, 32, sha256.New)
 
-func (e *ClientQuantumEncryption) Decrypt(ciphertext []byte) []byte {
-	nonceSize := e.gcm.NonceSize()
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	nonceSize := gcm.NonceSize()
 	if len(ciphertext) < nonceSize {
-		return nil
+		return nil, fmt.Errorf("ciphertext too short")
 	}
 
 	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
-	plaintext, err := e.gcm.Open(nil, nonce, ciphertext, nil)
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("failed to decrypt: %w", err)
 	}
 
-	return plaintext
+	return plaintext, nil
 }
