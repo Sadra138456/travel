@@ -7,7 +7,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/pem"
 	"fmt"
 	"math/big"
 	"net"
@@ -17,145 +16,47 @@ import (
 )
 
 type ServerTransport struct {
-	cfg          *ServerConfig
-	enc          *ServerQuantumEncryption
-	quicListener *quic.Listener
-	httpsListener net.Listener
-	vncListener   net.Listener
-	ctx          context.Context
-	cancel       context.CancelFunc
+	listener *quic.Listener
 }
 
-func NewServerTransport(cfg *ServerConfig, enc *ServerQuantumEncryption) (*ServerTransport, error) {
-	ctx, cancel := context.WithCancel(context.Background())
+func NewServerTransport(addr string) (*ServerTransport, error) {
+	tlsConfig, err := generateTLSConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate TLS config: %w", err)
+	}
+
+	listener, err := quic.ListenAddr(addr, tlsConfig, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to listen: %w", err)
+	}
+
 	return &ServerTransport{
-		cfg:    cfg,
-		enc:    enc,
-		ctx:    ctx,
-		cancel: cancel,
+		listener: listener,
 	}, nil
 }
 
-func (t *ServerTransport) StartQUIC(handler func(net.Conn, string)) error {
-	tlsConfig, err := generateTLSConfig()
+func (t *ServerTransport) Accept(ctx context.Context) (net.Conn, error) {
+	conn, err := t.listener.Accept(ctx)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("failed to accept connection: %w", err)
 	}
 
-	quicConfig := &quic.Config{
-		MaxIdleTimeout:  30 * time.Second,
-		KeepAlivePeriod: 10 * time.Second,
-	}
-
-	addr := fmt.Sprintf("%s:%d", t.cfg.ListenAddr, t.cfg.QUICPort)
-	listener, err := quic.ListenAddr(addr, tlsConfig, quicConfig)
+	stream, err := conn.AcceptStream(ctx)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("failed to accept stream: %w", err)
 	}
 
-	t.quicListener = listener
-
-	go func() {
-		for {
-			conn, err := listener.Accept(t.ctx)
-			if err != nil {
-				return
-			}
-
-			go func(c quic.Connection) {
-				stream, err := c.AcceptStream(t.ctx)
-				if err != nil {
-					return
-				}
-				handler(&quicStreamConn{stream, c}, "QUIC")
-			}(conn)
-		}
-	}()
-
-	return nil
+	quicConn := conn
+	return &quicStreamConn{
+		stream: stream,
+		conn:   &quicConn,
+	}, nil
 }
 
-func (t *ServerTransport) StartHTTPS(handler func(net.Conn, string)) error {
-	tlsConfig, err := generateTLSConfig()
-	if err != nil {
-		return err
+func (t *ServerTransport) Close() error {
+	if t.listener != nil {
+		return t.listener.Close()
 	}
-
-	addr := fmt.Sprintf("%s:%d", t.cfg.ListenAddr, t.cfg.HTTPSPort)
-	listener, err := tls.Listen("tcp", addr, tlsConfig)
-	if err != nil {
-		return err
-	}
-
-	t.httpsListener = listener
-
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			go handler(conn, "HTTPS")
-		}
-	}()
-
-	return nil
-}
-
-func (t *ServerTransport) StartVNC(handler func(net.Conn, string)) error {
-	addr := fmt.Sprintf("%s:%d", t.cfg.ListenAddr, t.cfg.VNCPort)
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
-	}
-
-	t.vncListener = listener
-
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-
-			conn.Write([]byte("RFB 003.008\n"))
-
-			go handler(conn, "VNC")
-		}
-	}()
-
-	return nil
-}
-
-func (t *ServerTransport) Stop() {
-	t.cancel()
-	if t.quicListener != nil {
-		t.quicListener.Close()
-	}
-	if t.httpsListener != nil {
-		t.httpsListener.Close()
-	}
-	if t.vncListener != nil {
-		t.vncListener.Close()
-	}
-}
-
-type quicStreamConn struct {
-	quic.Stream
-	conn quic.Connection
-}
-
-func (q *quicStreamConn) LocalAddr() net.Addr {
-	return q.conn.LocalAddr()
-}
-
-func (q *quicStreamConn) RemoteAddr() net.Addr {
-	return q.conn.RemoteAddr()
-}
-
-func (q *quicStreamConn) SetDeadline(t time.Time) error {
-	q.SetReadDeadline(t)
-	q.SetWriteDeadline(t)
 	return nil
 }
 
@@ -168,7 +69,7 @@ func generateTLSConfig() (*tls.Config, error) {
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject: pkix.Name{
-			Organization: []string{"Example Corp"},
+			Organization: []string{"Ant Project"},
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
@@ -182,16 +83,13 @@ func generateTLSConfig() (*tls.Config, error) {
 		return nil, err
 	}
 
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-
-	cert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		return nil, err
-	}
-
 	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		NextProtos:   []string{"h3", "http/1.1"},
+		Certificates: []tls.Certificate{
+			{
+				Certificate: [][]byte{certDER},
+				PrivateKey:  key,
+			},
+		},
+		NextProtos: []string{"ant-protocol"},
 	}, nil
 }
